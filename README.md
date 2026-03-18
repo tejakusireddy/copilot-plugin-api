@@ -116,6 +116,11 @@ Content-Type: application/json
 }
 ```
 
+## Live Result
+Successful end-to-end request against the local `/api/chat` endpoint backed by Azure OpenAI:
+
+![Successful chat API response](docs/images/chat-success.png)
+
 ## Environment Variables
 | Variable | Required | Description |
 | --- | --- | --- |
