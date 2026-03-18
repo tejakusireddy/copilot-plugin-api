@@ -4,6 +4,7 @@ using CopilotPluginApi.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
+using Microsoft.ML.Tokenizers;
 using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -91,8 +92,10 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.AddScoped<IAuditLogger, AuditLogger>();
 
 // Services
+builder.Services.AddSingleton<Tokenizer>(_ => TiktokenTokenizer.CreateForModel(TokenizerModelNames.Gpt4o));
 builder.Services.AddSingleton<IRateLimiterService, RateLimiterService>();
 builder.Services.AddSingleton<IIdempotencyService, IdempotencyService>();
+builder.Services.AddScoped<IMemoryService, MemoryService>();
 
 // Controllers
 builder.Services.AddControllers();
@@ -139,4 +142,9 @@ internal static class DatabaseProviderResolver
             _ => throw new InvalidOperationException(
                 $"Unsupported value '{providerName}' for {DatabaseEnvironmentVariableNames.Provider}. Supported values are '{SqliteProviderName}' and '{PostgreSqlProviderName}'.")
         };
+}
+
+internal static class TokenizerModelNames
+{
+    internal const string Gpt4o = "gpt-4o";
 }
