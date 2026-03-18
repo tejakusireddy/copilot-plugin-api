@@ -1,7 +1,10 @@
 using CopilotPluginApi.Configuration;
 using CopilotPluginApi.Data;
+using CopilotPluginApi.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -58,6 +61,15 @@ builder.Services
     .ValidateOnStart();
 
 // Redis
+builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
+builder.Services.AddSingleton<IConnectionMultiplexer>(serviceProvider =>
+{
+    var redisConfiguration = serviceProvider.GetRequiredService<IOptions<RedisConfig>>().Value;
+    var redisOptions = ConfigurationOptions.Parse(redisConfiguration.ConnectionString);
+    redisOptions.AbortOnConnectFail = false;
+
+    return ConnectionMultiplexer.Connect(redisOptions);
+});
 
 // Database
 builder.Services.AddDbContext<AppDbContext>(options =>
@@ -79,6 +91,8 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.AddScoped<IAuditLogger, AuditLogger>();
 
 // Services
+builder.Services.AddSingleton<IRateLimiterService, RateLimiterService>();
+builder.Services.AddSingleton<IIdempotencyService, IdempotencyService>();
 
 // Controllers
 builder.Services.AddControllers();
