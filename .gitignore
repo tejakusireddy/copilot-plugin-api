@@ -14,6 +14,12 @@ appsettings.Production.json
 *.db-shm
 *.db-wal
 
+# Explicit project build artifact paths
+bin/
+obj/
+src/bin/
+src/obj/
+
 # User-specific files
 *.rsuser
 *.suo

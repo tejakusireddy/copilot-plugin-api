@@ -1,13 +1,13 @@
 # copilot-plugin-api
-A production-grade Copilot-style conversational API built in C# / .NET 8 with Azure OpenAI, Redis, and SQL — designed for reliability, cost control, and LLM inference at scale.
+A production-grade Copilot-style conversational API built in C# / .NET 8 with Azure OpenAI, Redis, and SQL, designed for reliability, cost control, and LLM inference at scale.
 
-## Badges
-![.NET 8](https://img.shields.io/badge/.NET-8-512BD4?logo=dotnet&logoColor=white)
-![C#](https://img.shields.io/badge/C%23-12-239120?logo=csharp&logoColor=white)
-![Azure OpenAI](https://img.shields.io/badge/Azure_OpenAI-GPT--4o-0078D4?logo=microsoftazure&logoColor=white)
-![Redis](https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white)
-![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
-![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+[![.NET 8](https://img.shields.io/badge/.NET-8-512BD4?logo=dotnet&logoColor=white)](https://dotnet.microsoft.com)
+[![C# 12](https://img.shields.io/badge/C%23-12-239120?logo=csharp&logoColor=white)](https://learn.microsoft.com/en-us/dotnet/csharp/)
+[![Azure OpenAI](https://img.shields.io/badge/Azure_OpenAI-GPT--4o-0078D4?logo=microsoftazure&logoColor=white)](https://azure.microsoft.com/en-us/products/ai-services/openai-service)
+[![Redis](https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white)](https://redis.io)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://www.docker.com)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Build](https://img.shields.io/badge/build-passing-brightgreen)]()
 
 ## Architecture Overview
 ```mermaid
@@ -31,6 +31,19 @@ A production-grade Copilot-style conversational API built in C# / .NET 8 with Az
        K --> L[Audit Logger<br/>SQL · tokens · latency · cost estimate]
        L --> M[Client receives response]
 ```
+
+## How it works
+
+Every inbound request passes through a strict pipeline:
+
+1. **Rate limiter** checks a Redis token bucket, 100 requests per minute per user. Returns HTTP 429 immediately if exceeded.
+2. **Idempotency check** looks up the requestId in Redis. If the same request was seen in the last 60 seconds, the cached response is returned immediately, no duplicate LLM call.
+3. **Semantic cache** hashes the full prompt and checks Redis. A cache hit skips the LLM entirely, zero token cost.
+4. **Memory service** fetches the last 20 conversation turns from Redis, trimmed dynamically to fit within the model token budget.
+5. **Prompt builder** assembles system prompt + trimmed history + user message and enforces the token ceiling before the LLM call.
+6. **LLM orchestrator** calls GPT-4o with retry and exponential backoff. Falls back to GPT-4o-mini under throttling. Returns a graceful partial response if both fail — never a hard 500.
+7. **Response formatter** streams tokens back via SSE as they arrive, or returns full JSON if SSE is not requested.
+8. **Audit logger** writes token count, model used, latency, and a cost estimate to SQL on every request.
 
 ## Key Design Decisions
 - **Context-aware memory**: Redis-backed session history capped at 20 turns with 24h TTL and dynamic token trimming. This prevents unbounded Redis growth and keeps prompts within the model context window.
@@ -116,10 +129,24 @@ Content-Type: application/json
 }
 ```
 
-## Live Result
-Successful end-to-end request against the local `/api/chat` endpoint backed by Azure OpenAI:
+## Running the tests
+```bash
+dotnet test tests/CopilotApi.Tests/
+```
+
+The test suite covers:
+- Rate limiter: token bucket logic, fail-open on Redis unavailability
+- Idempotency: SHA-256 key hashing, cache hit and miss paths
+- Memory service: bounded history, TTL reset, token budget trimming
+- LLM orchestrator: retry policy, fallback activation, cost calculation, Responsible AI log compliance
+
+## Live result
+
+The following shows a successful end-to-end request against the local `/api/chat` endpoint backed by Azure OpenAI GPT-4o:
 
 ![Successful chat API response](docs/images/chat-success.png)
+
+Response includes model used, token counts, latency, and cost visibility fields — all logged to SQL via the audit logger.
 
 ## Environment Variables
 | Variable | Required | Description |
@@ -137,49 +164,71 @@ Successful end-to-end request against the local `/api/chat` endpoint backed by A
 ## Project Structure
 ```text
 copilot-plugin-api/
-├── src/
-│   ├── Configuration/
-│   │   ├── AzureOpenAIConfig.cs
-│   │   ├── CostsConfig.cs
-│   │   ├── MemoryConfig.cs
-│   │   ├── PromptConfig.cs
-│   │   ├── RateLimitConfig.cs
-│   │   ├── RedisConfig.cs
-│   │   └── SemanticCacheConfig.cs
-│   ├── Controllers/
-│   │   └── CopilotController.cs
-│   ├── Data/
-│   │   ├── AppDbContext.cs
-│   │   └── AuditLogger.cs
-│   ├── Models/
-│   │   ├── ChatRequest.cs
-│   │   ├── ChatResponse.cs
-│   │   ├── ConversationTurn.cs
-│   │   └── LlmResult.cs
-│   ├── Services/
-│   │   ├── IdempotencyService.cs
-│   │   ├── LlmOrchestratorService.cs
-│   │   ├── MemoryService.cs
-│   │   ├── PromptBuilderService.cs
-│   │   ├── RateLimiterService.cs
-│   │   └── SemanticCacheService.cs
-│   ├── CopilotPluginApi.csproj
-│   └── Program.cs
-├── tests/
-│   └── CopilotApi.Tests/
-│       ├── RateLimiterTests.cs
-│       ├── IdempotencyTests.cs
-│       ├── MemoryServiceTests.cs
-│       └── LlmOrchestratorTests.cs
-├── .dockerignore
-├── .env.example
-├── .gitignore
-├── Dockerfile
-├── docker-compose.yml
-├── appsettings.json
-├── CopilotPluginApi.sln
-└── README.md
+|-- docs/
+|   `-- images/
+|       `-- chat-success.png
+|-- src/
+|   |-- Configuration/
+|   |   |-- AzureOpenAIConfig.cs
+|   |   |-- CostsConfig.cs
+|   |   |-- MemoryConfig.cs
+|   |   |-- PromptConfig.cs
+|   |   |-- RateLimitConfig.cs
+|   |   |-- RedisConfig.cs
+|   |   `-- SemanticCacheConfig.cs
+|   |-- Controllers/
+|   |   `-- CopilotController.cs
+|   |-- Data/
+|   |   |-- Migrations/
+|   |   |   |-- 20260318035158_InitialCreate.cs
+|   |   |   |-- 20260318035158_InitialCreate.Designer.cs
+|   |   |   `-- AppDbContextModelSnapshot.cs
+|   |   |-- AppDbContext.cs
+|   |   |-- AuditLogConfiguration.cs
+|   |   `-- AuditLogger.cs
+|   |-- Models/
+|   |   |-- ChatRequest.cs
+|   |   |-- ChatResponse.cs
+|   |   |-- ConversationTurn.cs
+|   |   |-- LlmResult.cs
+|   |   `-- PromptTooLargeException.cs
+|   |-- Services/
+|   |   |-- IdempotencyService.cs
+|   |   |-- LlmOrchestratorService.cs
+|   |   |-- MemoryService.cs
+|   |   |-- PromptBuilderService.cs
+|   |   |-- RateLimiterService.cs
+|   |   `-- SemanticCacheService.cs
+|   |-- CopilotPluginApi.csproj
+|   `-- Program.cs
+|-- tests/
+|   `-- CopilotApi.Tests/
+|       |-- CopilotApi.Tests.csproj
+|       |-- IdempotencyTests.cs
+|       |-- LlmOrchestratorTests.cs
+|       |-- MemoryServiceTests.cs
+|       `-- RateLimiterTests.cs
+|-- .dockerignore
+|-- .env.example
+|-- .gitignore
+|-- appsettings.Development.json.example
+|-- appsettings.json
+|-- CopilotPluginApi.sln
+|-- docker-compose.yml
+|-- Dockerfile
+|-- LICENSE
+`-- README.md
 ```
+
+## What would production hardening add?
+
+This project is architected for production but intentionally scoped for clarity. The next layer of hardening would include:
+
+- **Polly ResiliencePipeline** replacing the manual retry loop in LlmOrchestratorService — circuit breaker, bulkhead isolation, and hedging policies
+- **OpenTelemetry** distributed tracing across all service layers — trace ID propagated from client through to audit log
+- **Vector similarity caching** via Azure AI Search or Qdrant — catches semantically equivalent prompts that hash differently
+- **Kubernetes deployment** with HorizontalPodAutoscaler keyed on request queue depth — Redis-backed shared state makes horizontal scaling safe
+- **Prompt injection detection** middleware — validates user input against known injection patterns before reaching the LLM
 
 ## License
 MIT
