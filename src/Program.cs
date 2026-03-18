@@ -1,4 +1,6 @@
 using CopilotPluginApi.Configuration;
+using CopilotPluginApi.Data;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -17,6 +19,12 @@ if (!File.Exists(localAppSettingsPath) && File.Exists(repositoryAppSettingsPath)
             optional: true,
             reloadOnChange: true);
 }
+
+var databaseProvider = DatabaseProviderResolver.Resolve(
+    Environment.GetEnvironmentVariable(DatabaseEnvironmentVariableNames.Provider));
+var databaseConnectionString = Environment.GetEnvironmentVariable(DatabaseEnvironmentVariableNames.ConnectionString)
+    ?? throw new InvalidOperationException(
+        $"The {DatabaseEnvironmentVariableNames.ConnectionString} environment variable must be set.");
 
 // Config
 builder.Services
@@ -50,13 +58,27 @@ builder.Services
     .ValidateOnStart();
 
 // Redis
-// TODO: Register Redis connectivity and related infrastructure when the Redis layer exists.
 
 // Database
-// TODO: Register the application database context and audit persistence when the data layer exists.
+builder.Services.AddDbContext<AppDbContext>(options =>
+{
+    switch (databaseProvider)
+    {
+        case DatabaseProvider.Sqlite:
+            options.UseSqlite(databaseConnectionString);
+            break;
+        case DatabaseProvider.PostgreSql:
+            options.UseNpgsql(databaseConnectionString);
+            break;
+        default:
+            throw new InvalidOperationException(
+                $"Unsupported database provider '{databaseProvider}'.");
+    }
+});
+
+builder.Services.AddScoped<IAuditLogger, AuditLogger>();
 
 // Services
-// TODO: Register application services when their implementations are added.
 
 // Controllers
 builder.Services.AddControllers();
@@ -73,4 +95,34 @@ internal static class ApplicationConfigurationFiles
 
     internal static string GetEnvironmentSpecific(string environmentName) =>
         $"appsettings.{environmentName}.json";
+}
+
+internal enum DatabaseProvider
+{
+    Sqlite,
+    PostgreSql
+}
+
+internal static class DatabaseEnvironmentVariableNames
+{
+    internal const string Provider = "DATABASE_PROVIDER";
+    internal const string ConnectionString = "DATABASE_CONNECTION_STRING";
+}
+
+internal static class DatabaseProviderResolver
+{
+    private const string SqliteProviderName = "sqlite";
+    private const string PostgreSqlProviderName = "postgresql";
+    private const string PostgresProviderAlias = "postgres";
+
+    internal static DatabaseProvider Resolve(string? providerName) =>
+        providerName switch
+        {
+            null or "" => DatabaseProvider.Sqlite,
+            var value when value.Equals(SqliteProviderName, StringComparison.OrdinalIgnoreCase) => DatabaseProvider.Sqlite,
+            var value when value.Equals(PostgreSqlProviderName, StringComparison.OrdinalIgnoreCase) => DatabaseProvider.PostgreSql,
+            var value when value.Equals(PostgresProviderAlias, StringComparison.OrdinalIgnoreCase) => DatabaseProvider.PostgreSql,
+            _ => throw new InvalidOperationException(
+                $"Unsupported value '{providerName}' for {DatabaseEnvironmentVariableNames.Provider}. Supported values are '{SqliteProviderName}' and '{PostgreSqlProviderName}'.")
+        };
 }
