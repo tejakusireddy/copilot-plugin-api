@@ -1,3 +1,6 @@
+using System.ClientModel;
+using System.ClientModel.Primitives;
+using Azure.AI.OpenAI;
 using CopilotPluginApi.Configuration;
 using CopilotPluginApi.Data;
 using CopilotPluginApi.Services;
@@ -29,6 +32,9 @@ var databaseProvider = DatabaseProviderResolver.Resolve(
 var databaseConnectionString = Environment.GetEnvironmentVariable(DatabaseEnvironmentVariableNames.ConnectionString)
     ?? throw new InvalidOperationException(
         $"The {DatabaseEnvironmentVariableNames.ConnectionString} environment variable must be set.");
+var azureOpenAIApiKey = Environment.GetEnvironmentVariable(AzureOpenAIEnvironmentVariableNames.ApiKey)
+    ?? throw new InvalidOperationException(
+        $"The {AzureOpenAIEnvironmentVariableNames.ApiKey} environment variable must be set.");
 
 // Config
 builder.Services
@@ -104,12 +110,27 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.AddScoped<IAuditLogger, AuditLogger>();
 
 // Services
+builder.Services.AddSingleton<AzureOpenAIClient>(serviceProvider =>
+{
+    var azureOpenAIConfiguration = serviceProvider.GetRequiredService<IOptions<AzureOpenAIConfig>>().Value;
+    var clientOptions = new AzureOpenAIClientOptions
+    {
+        RetryPolicy = new ClientRetryPolicy(0)
+    };
+
+    return new AzureOpenAIClient(
+        new Uri(azureOpenAIConfiguration.Endpoint),
+        new ApiKeyCredential(azureOpenAIApiKey),
+        clientOptions);
+});
+
 builder.Services.AddSingleton<Tokenizer>(_ => TiktokenTokenizer.CreateForModel(TokenizerModelNames.Gpt4o));
 builder.Services.AddSingleton<IRateLimiterService, RateLimiterService>();
 builder.Services.AddSingleton<IIdempotencyService, IdempotencyService>();
 builder.Services.AddScoped<IMemoryService, MemoryService>();
 builder.Services.AddScoped<ISemanticCacheService, SemanticCacheService>();
 builder.Services.AddSingleton<IPromptBuilderService, PromptBuilderService>();
+builder.Services.AddScoped<ILlmOrchestratorService, LlmOrchestratorService>();
 
 // Controllers
 builder.Services.AddControllers();
@@ -138,6 +159,11 @@ internal static class DatabaseEnvironmentVariableNames
 {
     internal const string Provider = "DATABASE_PROVIDER";
     internal const string ConnectionString = "DATABASE_CONNECTION_STRING";
+}
+
+internal static class AzureOpenAIEnvironmentVariableNames
+{
+    internal const string ApiKey = "AZURE_OPENAI_API_KEY";
 }
 
 internal static class DatabaseProviderResolver
